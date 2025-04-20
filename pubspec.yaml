@@ -1,0 +1,26 @@
+name: myapp
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0-209.1.beta
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cloud_firestore: ^4.15.0
+  flutter_svg: ^2.0.9
+  cupertino_icons: ^1.0.8
+  firebase_core: ^2.25.4
+  intl: ^0.18.1
+  bonsoir: ^3.1.0 # For mDNS discovery
+
+dev_dependencies:
+# fl_chart: ^0.70.2  //  Removed or commented out
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
