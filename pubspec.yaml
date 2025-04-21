@@ -1,25 +1,23 @@
-name: myapp
-description: "A new Flutter project."
-publish_to: 'none'
-
+name: your_project_name
+description: A Flutter app for IoT device discovery and control.
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.7.0-209.1.beta
+  sdk: '>=3.7.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  cloud_firestore: ^4.15.0
+  multicast_dns: 0.3.3
   flutter_svg: ^2.0.9
+  cloud_firestore: ^5.6.6
   cupertino_icons: ^1.0.8
-  firebase_core: ^2.25.4
-  intl: ^0.18.1
-  bonsoir: ^3.1.0 # For mDNS discovery
+  firebase_core: ^3.13.0
+  intl: ^0.20.2
 
 dev_dependencies:
-# fl_chart: ^0.70.2  //  Removed or commented out
-
+  flutter_test:
+    sdk: flutter
 flutter:
   uses-material-design: true
   assets:
