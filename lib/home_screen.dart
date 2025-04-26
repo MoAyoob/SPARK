@@ -4,9 +4,9 @@ import 'package:multicast_dns/multicast_dns.dart';
 import 'device_discovery.dart';
 import 'device.dart';
 import 'device_control_screen.dart';
-import 'usage_analysis_screen.dart'; // Import UsageAnalysisScreen
-import 'bill_management_screen.dart';   // Import BillManagementScreen
-import 'rewards_screen.dart';       // Import RewardsScreen
+import 'usage_analysis_screen.dart';
+import 'bill_management_screen.dart';
+import 'rewards_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -17,7 +17,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
-  // Changed to stateful
   final List<Widget> _widgetOptions = [
     const HomeScreenContent(),
     const UsageAnalysisScreen(),
@@ -67,9 +66,12 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
   final List<Device> _devices = [
     Device(name: "Smart TV", room: "Haidar room", status: false, icon: 'tv.svg'),
     Device(name: "Air Purifier", room: "Kitchen", status: true, icon: 'air-purifier.svg'),
-    Device(name: "Air Conditioner", room: "Hussain's Room", status: false, icon: 'air-conditioner.svg'),
-    Device(name: "Main Router", room: "Huawei Router 5G", status: true, icon: 'router.svg'),
-    Device(name: "Smart Light", room: "Hall - 4 lights", status: false, icon: 'light-bulb.svg'),
+    Device(name: "Air Conditioner", room: "Hussain\'s Room", status: false,
+        icon: 'air-conditioner.svg'),
+    Device(name: "Main Router", room: "Huawei Router 5G", status: true,
+        icon: 'router.svg'),
+    Device(name: "Smart Light", room: "Hall - 4 lights", status: false,
+        icon: 'light-bulb.svg'),
     Device(name: "Socket", room: "Kitchen", status: false, icon: 'plug.svg'),
   ];
 
@@ -128,25 +130,30 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
       final ip = device is PtrResourceRecord
           ? device.domainName?.split('.').first ?? 'unknown'
           : device.toString();
-      await checkDeviceSecurity(ip);
+      await _performPortScan(ip, device is PtrResourceRecord ? device.domainName : ip);
     }
   }
 
-  Future<void> checkDeviceSecurity(String host) async {
+  Future<void> _performPortScan(String host, String deviceName) async {
     final results = await _deviceDiscovery.scanPorts(host);
     if (mounted) {
       setState(() {
         _portResults[host] = results;
-        _securityResults.add("$host - ${
-            results.entries.where((e) => e.value)
-                .map((e) => 'Port ${e.key}')
-                .join(', ') } open"
-        );
+        final openPorts = results.entries.where((e) => e.value);
+        if (openPorts.isNotEmpty) {
+          _securityResults.add(
+              "🔓 $deviceName - Open ports: ${openPorts
+                  .map((e) => e.key)
+                  .join(', ')} open");
+        } else {
+          _securityResults.add("🔒 $deviceName - No open ports found");
+        }
       });
     }
   }
 
-  Widget _buildControlButton(String icon, String label, VoidCallback onPressed) {
+  Widget _buildControlButton(
+      String icon, String label, VoidCallback onPressed) {
     return Column(
       children: [
         ElevatedButton(
@@ -177,27 +184,28 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeaderSection(constraints),
-              const SizedBox(height: 20),
-              _buildBillCard(),
-              const SizedBox(height: 20),
-              _buildControlButtonsRow(),
-              const SizedBox(height: 25),
-              _buildNetworkSection(),
-              const SizedBox(height: 25),
-              _buildSecurityResults(),
-              const SizedBox(height: 25),
-              _buildDevicesGrid(constraints),
-            ],
+      builder: (context, constraints) =>
+          SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildHeaderSection(constraints),
+                  const SizedBox(height: 20),
+                  _buildBillCard(),
+                  const SizedBox(height: 20),
+                  _buildControlButtonsRow(),
+                  const SizedBox(height: 25),
+                  _buildNetworkSection(),
+                  const SizedBox(height: 25),
+                  _buildSecurityResults(),
+                  const SizedBox(height: 25),
+                  _buildDevicesGrid(constraints),
+                ],
+              ),
+            ),
           ),
-        ),
-      ),
     );
   }
 
@@ -205,7 +213,7 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text("Mohammed's Home", style: TextStyle(
+        Text("Mohammed\'s Home", style: TextStyle(
           fontWeight: FontWeight.w900,
           fontSize: constraints.maxWidth * 0.055,
         )),
@@ -295,7 +303,6 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
                 ],
               ),
               const SizedBox(height: 12),
-              ..._buildDeviceList(),
             ],
           ),
         ),
@@ -305,23 +312,53 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
 
   List<Widget> _buildDeviceList() {
     return [
-      if (_discoveredDevices.isNotEmpty)
-        ..._discoveredDevices.map((d) => ListTile(
-          title: Text(d.domainName ?? 'Unknown Device'),
-          subtitle: const Text('mDNS Device'),
-          leading: const Icon(Icons.device_hub),
+      for (var device in _discoveredDevices)
+        ListTile(
+          title: Text(
+            _formatDeviceName(device.domainName ?? 'Unknown Device'),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('mDNS Device'),
+              if (_portResults.containsKey(device.domainName))
+                Text(
+                  'Open ports: ${_portResults[device.domainName]!.entries
+                      .where((e) => e.value)
+                      .map((e) => e.key)
+                      .join(', ')}',
+                  style: TextStyle(color: Colors.green[700], fontSize: 12),
+                ),
+              if (_portResults.containsKey(device.domainName) == false)
+                const Text("No Ports Found", style: TextStyle(fontSize: 12)),
+            ],
+          ),
+          leading: const Icon(Icons.device_hub, color: Colors.blue),
           dense: true,
-        )),
-      if (_networkDevices.isNotEmpty)
-        ..._networkDevices.map((ip) => ListTile(
+        ),
+      for (var ip in _networkDevices)
+        ListTile(
           title: Text(ip),
-          subtitle: Text(_portResults[ip]?.entries
-              .where((e) => e.value)
-              .map((e) => 'Port ${e.key}')
-              .join(', ') ?? 'Scanning...'),
-          leading: const Icon(Icons.lan),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Network Device'),
+              if (_portResults.containsKey(ip))
+                Text(
+                  'Open ports: ${_portResults[ip]!.entries
+                      .where((e) => e.value)
+                      .map((e) => e.key)
+                      .join(', ')}',
+                  style: TextStyle(color: Colors.green[700], fontSize: 12),
+                ),
+              if (_portResults.containsKey(ip) == false)
+                const Text("No Ports Found", style: TextStyle(fontSize: 12)),
+            ],
+          ),
+          leading: const Icon(Icons.lan, color: Colors.blue),
           dense: true,
-        )),
+        ),
     ];
   }
 
@@ -334,11 +371,24 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
           fontSize: 18,
         )),
         const SizedBox(height: 12),
-        ..._securityResults.map((r) => ListTile(
-          title: Text(r),
-          leading: const Icon(Icons.security, size: 20),
-          dense: true,
-        )),
+        ..._securityResults.map((r) =>
+            ListTile(
+              title: Text(r),
+              leading: const Icon(Icons.security, size: 20),
+              dense: true,
+            )),
+        const SizedBox(height: 12),
+        // Display discovered devices
+        if (_discoveredDevices.isNotEmpty || _networkDevices.isNotEmpty)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text("Discovered Devices:",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 8),
+              ..._buildDeviceList(),
+            ],
+          )
       ],
     );
   }
@@ -366,6 +416,13 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
         ),
       ],
     );
+  }
+
+  String _formatDeviceName(String domain) {
+    return domain
+        .replaceAll('._http._tcp.local.', '')
+        .replaceAll('.local', '')
+        .replaceAll('_', ' ');
   }
 
   Widget _buildDeviceCard(Device device) {
@@ -428,3 +485,4 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
     );
   }
 }
+
