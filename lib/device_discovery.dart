@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -6,14 +5,18 @@ import 'package:multicast_dns/multicast_dns.dart';
 
 class DeviceDiscovery {
   MDnsClient? _mdnsClient;
-  StreamSubscription<ResourceRecord>? _mdnsSubscription;
-  final StreamController<PtrResourceRecord> _controller =
-  StreamController<PtrResourceRecord>.broadcast();
+  StreamSubscription<Map<String, Object>>? _mdnsSubscription;
+  StreamController<String> _controller =
+  StreamController<String>.broadcast();
   final List<String> _networkDevices = [];
   bool _isDiscovering = false;
   String _scanStatus = 'Not Started';
+  int _scanTimeoutSeconds = 15;
+  String _targetIp = '172.20.10.5';
 
-  Stream<PtrResourceRecord> get deviceStream => _controller.stream;
+  DeviceDiscovery({String targetIp = '172.20.10.5'}) : _targetIp = targetIp;
+
+  Stream<String> get deviceStream => _controller.stream;
   List<String> get networkDevices => _networkDevices;
   String get scanStatus => _scanStatus;
 
@@ -22,18 +25,42 @@ class DeviceDiscovery {
     _isDiscovering = true;
     _scanStatus = 'Scanning...';
     _networkDevices.clear();
-    _controller.sink.add(PtrResourceRecord('', 0, domainName: ''));
-
+    print("DeviceDiscovery: startDiscovery() called");
+    _controller = StreamController<String>.broadcast();
     try {
       if (kIsWeb) {
+        print("DeviceDiscovery: Using web discovery (HTTP Probe)");
         await _webDiscovery();
       } else {
+        print("DeviceDiscovery: Using native discovery");
         await _nativeDiscovery();
       }
     } catch (e) {
-      print("Discovery error: $e");
+      print("DeviceDiscovery: Discovery error: $e");
       _scanStatus = 'Scan Failed';
-    } finally {
+      _isDiscovering = false;
+      _controller.addError(e);
+    }
+  }
+
+  Future<void> _webDiscovery() async {
+    try {
+      final client = HttpClient();
+      final request = await client.getUrl(Uri.parse('http://$_targetIp'));
+      final response = await request.close();
+      if (response.statusCode == 200) {
+        if (!_networkDevices.contains(_targetIp)) {
+          _networkDevices.add(_targetIp);
+          _controller.add(_targetIp);
+        }
+      }
+    } catch (e) {
+      print("Web discovery error: $e");
+      _scanStatus = 'Scan Failed';
+      _isDiscovering = false;
+      _controller.addError(e);
+      //rethrow;  Removed rethrow
+    } finally{
       _isDiscovering = false;
     }
   }
@@ -41,97 +68,97 @@ class DeviceDiscovery {
   Future<void> _nativeDiscovery() async {
     _mdnsClient = MDnsClient();
     try {
-      final interfaces = await NetworkInterface.list();
-      InternetAddress? ipv4Address;
-
-      for (var interface in interfaces) {
-        for (var addr in interface.addresses) {
-          if (addr.type == InternetAddressType.IPv4) {
-            ipv4Address = addr;
-            break;
-          }
-        }
-        if (ipv4Address != null) break;
-      }
-
+      print("DeviceDiscovery: _nativeDiscovery() started");
       await _mdnsClient!.start();
+      print("DeviceDiscovery: mDNS client started");
+
       _mdnsSubscription = _mdnsClient!
-          .lookup(ResourceRecordQuery.serverPointer('_http._tcp.local'))
-          .listen((response) async {  // Make the callback async
-        if (response is PtrResourceRecord && !_controller.isClosed) {
-          final deviceName = response.domainName;
-          if (!_networkDevices.contains(deviceName)) {
-            _networkDevices.add(deviceName);
-            _controller.add(response);
+          .lookup(ResourceRecordQuery.serverPointer('_http._tcp.local.'),
+          timeout: Duration(seconds: _scanTimeoutSeconds))
+          .asyncExpand((ResourceRecord record) async* {
+        if (record is PtrResourceRecord) {
+          final srvQuery = ResourceRecordQuery.service(record.domainName!);
+          final srvResponse = await _mdnsClient?.lookup(srvQuery)?.toList() ?? [];
+
+          for (var srvRecord in srvResponse.whereType<SrvResourceRecord>()) {
+            final ipQuery = ResourceRecordQuery.addressIPv4(srvRecord.target);
+            final ipResponse =
+                await _mdnsClient?.lookup(ipQuery)?.toList() ?? [];
+
+            for (var ipRecord in
+            ipResponse.whereType<IPAddressResourceRecord>()) {
+              yield {
+                'name': srvRecord.name,
+                'ip': ipRecord.address.address,
+                'port': srvRecord.port
+              };
+            }
           }
         }
+      }).listen((data) {
+        final deviceInfo = '${data['name']}|${data['ip']}|${data['port']}';
+        if (!_networkDevices.contains(deviceInfo)) {
+          _networkDevices.add(deviceInfo);
+          _controller.add(deviceInfo);
+        }
+      }, onError: (error) {
+        print("mDNS error: $error");
+        _scanStatus = 'Scan Failed';
+        _isDiscovering = false;
+        _controller.addError(error);
+      }, onDone: () {
+        _isDiscovering = false;
+        _scanStatus = 'Scan Complete';
+        if (!_controller.isClosed) _controller.close();
       });
     } catch (e) {
       print("Native discovery error: $e");
       _scanStatus = 'Scan Failed';
+      _isDiscovering = false;
+      _controller.addError(e);
+    } finally {
+      _mdnsClient?.stop();
     }
   }
-
-  Future<void> _webDiscovery() async {
-    if (!_controller.isClosed) {
-      // Mock mDNS device
-      _controller.add(PtrResourceRecord(
-        'MockIoTDevice._http._tcp.local.',
-        10,
-        domainName: 'MockIoTDevice.local',
-      ));
-
-      _networkDevices.add('172.20.10.2');
-      await Future.delayed(const Duration(seconds: 2));
-    }
-  }
-
 
   Future<Map<int, bool>> scanPorts(String host) async {
-    final ports = [80]; // Simplified to only scan port 80
+    final ports = [80];
     final results = <int, bool>{};
-
+    print("DeviceDiscovery: scanPorts() started for host: $host");
     try {
       if (kIsWeb) {
-        final client = HttpClient();
-        for (var port in ports) {
-          try {
-            final request = await client.get(host, port, '')
-                .timeout(const Duration(seconds: 2));
-            await request.close();
-            results[port] = true;
-          } catch (_) {
-            results[port] = false;
-          }
-        }
+        print("DeviceDiscovery: Port scanning is not supported on web.");
+        return {};
       } else {
-        for (var port in ports) { //changed to a loop
+        for (var port in ports) {
           try {
             final socket = await Socket.connect(host, port)
                 .timeout(const Duration(seconds: 2));
             socket.destroy();
             results[port] = true;
+            print("DeviceDiscovery: Port $port on $host is open (native)");
           } catch (_) {
             results[port] = false;
+            print("DeviceDiscovery: Port $port on $host is closed (native)");
           }
         }
       }
     } catch (e) {
-      print("Port scan error: $e");
+      print("DeviceDiscovery: Port scan error: $e");
       _scanStatus = 'Scan Failed';
     }
-
     return results;
   }
 
   void stopDiscovery() {
+    print("DeviceDiscovery: stopDiscovery() called");
     _mdnsSubscription?.cancel();
     _mdnsClient?.stop();
     _mdnsClient = null;
     _isDiscovering = false;
     _scanStatus = 'Scan Complete';
-    if (!_controller.isClosed) {
-      _controller.add(PtrResourceRecord('', 0, domainName: ''));
-    }
+    _controller.close();
+    print("DeviceDiscovery: Discovery stopped");
   }
 }
+

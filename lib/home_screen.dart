@@ -1,16 +1,17 @@
+
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:multicast_dns/multicast_dns.dart';
-import 'device_discovery.dart';
+import 'device_discovery.dart'; // Import the device_discovery.dart file
 import 'device.dart';
 import 'device_control_screen.dart';
 import 'usage_analysis_screen.dart';
 import 'bill_management_screen.dart';
 import 'rewards_screen.dart';
+import 'dart:async';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -23,7 +24,6 @@ class _HomeScreenState extends State<HomeScreen> {
     const BillManagementScreen(),
     const RewardsScreen(),
   ];
-
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
@@ -57,7 +57,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class HomeScreenContent extends StatefulWidget {
   const HomeScreenContent({super.key});
-
   @override
   State<HomeScreenContent> createState() => _HomeScreenContentState();
 }
@@ -65,31 +64,44 @@ class HomeScreenContent extends StatefulWidget {
 class _HomeScreenContentState extends State<HomeScreenContent> {
   final List<Device> _devices = [
     Device(name: "Smart TV", room: "Haidar room", status: false, icon: 'tv.svg'),
-    Device(name: "Air Purifier", room: "Kitchen", status: true, icon: 'air-purifier.svg'),
-    Device(name: "Air Conditioner", room: "Hussain\'s Room", status: false,
+    Device(
+        name: "Air Purifier", room: "Kitchen", status: true, icon: 'air-purifier.svg'),
+    Device(
+        name: "Air Conditioner", room: "Hussain\'s Room", status: false,
         icon: 'air-conditioner.svg'),
     Device(name: "Main Router", room: "Huawei Router 5G", status: true,
         icon: 'router.svg'),
-    Device(name: "Smart Light", room: "Hall - 4 lights", status: false,
+    Device(
+        name: "Smart Light", room: "Hall - 4 lights", status: false,
         icon: 'light-bulb.svg'),
     Device(name: "Socket", room: "Kitchen", status: false, icon: 'plug.svg'),
   ];
-
   final DeviceDiscovery _deviceDiscovery = DeviceDiscovery();
-  List<PtrResourceRecord> _discoveredDevices = [];
+  List<String> _discoveredDevices = [];
   List<String> _networkDevices = [];
   String _discoveryStatus = 'Not Started';
   List<String> _securityResults = [];
   Map<String, Map<int, bool>> _portResults = {};
   bool _isScanning = false;
+  StreamSubscription<String>? _deviceStreamSubscription;
 
   @override
   void initState() {
     super.initState();
+    print("HomeScreenContent: initState()");
     _startDeviceDiscovery();
   }
 
+  @override
+  void dispose() {
+    print("HomeScreenContent: dispose()");
+    _deviceDiscovery.stopDiscovery();
+    _deviceStreamSubscription?.cancel();
+    super.dispose();
+  }
+
   void _startDeviceDiscovery() {
+    if (_isScanning) return;
     setState(() {
       _isScanning = true;
       _discoveryStatus = 'Scanning...';
@@ -100,51 +112,91 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
     });
 
     _deviceDiscovery.startDiscovery();
-    _deviceDiscovery.deviceStream.listen((record) {
-      if (mounted && !_discoveredDevices.contains(record)) {
-        setState(() => _discoveredDevices.add(record));
-      }
-    });
+    _deviceStreamSubscription = _deviceDiscovery.deviceStream.listen(
+          (deviceInfo) {
+        print("HomeScreenContent: Device Discovered: $deviceInfo");
+        //final parts = deviceInfo.split('|'); // Removed this line
+        //if (parts.length == 3) {
+        //  final name = parts[0];
+        //  final ip = parts[1];
+        //  final port = parts[2];
+        //  final deviceString = '$name|$ip|$port';
+        if (mounted && !_discoveredDevices.contains(deviceInfo)) {
+          // Changed from deviceString to deviceInfo
+          setState(() {
+            _discoveredDevices.add(deviceInfo);
+            print(
+                "HomeScreenContent: Device added to _discoveredDevices (setState): $_discoveredDevices");
+            if (_discoveredDevices.isNotEmpty) {
+              _discoveryStatus = 'Devices Found';
+            }
+          });
+        }
+        //} else {
+        //  print(
+        //      "HomeScreenContent: Discovered device string was not in the expected format: $deviceInfo");
+        //}
+      },
+      onError: (error) {
+        print("HomeScreenContent: Error during discovery: $error");
+        if (mounted) {
+          setState(() {
+            _discoveryStatus = 'Scan Failed';
+            _isScanning = false;
+          });
+        }
+      },
+      onDone: () {
+        print("HomeScreenContent: Discovery stream completed.");
+        if (mounted && _isScanning) {
+          setState(() {
+            _isScanning = false;
+            _discoveryStatus = 'Scan Complete';
+          });
+        }
+      },
+    );
 
-    Future.delayed(const Duration(seconds: 10), () {
-      if (mounted) {
+    Future.delayed(const Duration(seconds: 15), () {
+      if (mounted && _isScanning) {
         setState(() {
           _isScanning = false;
-          _discoveryStatus = 'Scan Complete';
-          _networkDevices = _deviceDiscovery.networkDevices;
+          _discoveryStatus = 'Scan Complete (Timeout)';
         });
+        _deviceDiscovery.stopDiscovery();
       }
-      _deviceDiscovery.stopDiscovery();
-      _performSecurityChecks();
     });
   }
 
   Future<void> _performSecurityChecks() async {
+    print("HomeScreenContent: _performSecurityChecks() started");
     final allDevices = [..._discoveredDevices, ..._networkDevices];
     if (allDevices.isEmpty) {
       setState(() => _securityResults.add("No devices found to check."));
+      print("HomeScreenContent: No devices found to check");
       return;
     }
-
     for (var device in allDevices) {
-      final ip = device is PtrResourceRecord
-          ? device.domainName?.split('.').first ?? 'unknown'
-          : device.toString();
-      await _performPortScan(ip, device is PtrResourceRecord ? device.domainName : ip);
+      //final ip = device is PtrResourceRecord ? device.domainName?.split('.').first ?? 'unknown' : device.toString();
+      final parts = device.split('|');
+      final ip = parts.length > 1 ? parts[1] : 'Unknown';
+      print("HomeScreenContent: Checking security for device: $ip, $device");
+      await _performPortScan(ip, device);
     }
   }
 
   Future<void> _performPortScan(String host, String deviceName) async {
     final results = await _deviceDiscovery.scanPorts(host);
+    print("HomeScreenContent: Port scan results for $host: $results");
     if (mounted) {
       setState(() {
         _portResults[host] = results;
         final openPorts = results.entries.where((e) => e.value);
         if (openPorts.isNotEmpty) {
           _securityResults.add(
-              "🔓 $deviceName - Open ports: ${openPorts
-                  .map((e) => e.key)
-                  .join(', ')} open");
+              "🔓 $deviceName - Open ports: ${openPorts.map((e) => e.key).join(
+                ', ',
+              )} open");
         } else {
           _securityResults.add("🔒 $deviceName - No open ports found");
         }
@@ -173,10 +225,11 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
           ),
         ),
         const SizedBox(height: 8),
-        Text(label, style: const TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 12,
-        )),
+        Text(label,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+            )),
       ],
     );
   }
@@ -184,28 +237,27 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (context, constraints) =>
-          SingleChildScrollView(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildHeaderSection(constraints),
-                  const SizedBox(height: 20),
-                  _buildBillCard(),
-                  const SizedBox(height: 20),
-                  _buildControlButtonsRow(),
-                  const SizedBox(height: 25),
-                  _buildNetworkSection(),
-                  const SizedBox(height: 25),
-                  _buildSecurityResults(),
-                  const SizedBox(height: 25),
-                  _buildDevicesGrid(constraints),
-                ],
-              ),
-            ),
+      builder: (context, constraints) => SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildHeaderSection(constraints),
+              const SizedBox(height: 20),
+              _buildBillCard(),
+              const SizedBox(height: 20),
+              _buildControlButtonsRow(),
+              const SizedBox(height: 25),
+              _buildNetworkSection(),
+              const SizedBox(height: 25),
+              _buildSecurityResults(),
+              const SizedBox(height: 25),
+              _buildDevicesGrid(constraints),
+            ],
           ),
+        ),
+      ),
     );
   }
 
@@ -213,10 +265,11 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text("Mohammed\'s Home", style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: constraints.maxWidth * 0.055,
-        )),
+        Text("Mohammed\'s Home",
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: constraints.maxWidth * 0.055,
+            )),
         IconButton(
           icon: const Icon(Icons.person, size: 28),
           onPressed: () {},
@@ -247,15 +300,17 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          const Text("Current Bill", style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          )),
-          Text("17.03 BHD", style: TextStyle(
-            color: Colors.green[900],
-            fontWeight: FontWeight.w900,
-            fontSize: 16,
-          )),
+          const Text("Current Bill",
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              )),
+          Text("17.03 BHD",
+              style: TextStyle(
+                color: Colors.green[900],
+                fontWeight: FontWeight.w900,
+                fontSize: 16,
+              )),
         ],
       ),
     );
@@ -279,10 +334,11 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Network Devices", style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 18,
-        )),
+        const Text("Network Devices",
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            )),
         const SizedBox(height: 12),
         Container(
           padding: const EdgeInsets.all(16),
@@ -303,6 +359,7 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
                 ],
               ),
               const SizedBox(height: 12),
+              Text("Discovered Devices Count: ${_discoveredDevices.length}"),
             ],
           ),
         ),
@@ -311,74 +368,51 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
   }
 
   List<Widget> _buildDeviceList() {
-    return [
-      for (var device in _discoveredDevices)
+    print(
+        "HomeScreenContent: _buildDeviceList() called with _discoveredDevices: $_discoveredDevices");
+    List<Widget> deviceList = [];
+    for (var device in _discoveredDevices) {
+      //final deviceName = _formatDeviceName(
+      //    device.domainName ?? 'Unknown Device'); //error is here
+      final parts = device.split('|');
+      final deviceName = parts[0];
+      final deviceIp = parts.length > 1 ? parts[1] : 'Unknown IP';
+      print("HomeScreenContent: Building list tile for device: $deviceName, $deviceIp");
+      deviceList.add(
         ListTile(
-          title: Text(
-            _formatDeviceName(device.domainName ?? 'Unknown Device'),
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('mDNS Device'),
-              if (_portResults.containsKey(device.domainName))
-                Text(
-                  'Open ports: ${_portResults[device.domainName]!.entries
-                      .where((e) => e.value)
-                      .map((e) => e.key)
-                      .join(', ')}',
-                  style: TextStyle(color: Colors.green[700], fontSize: 12),
-                ),
-              if (_portResults.containsKey(device.domainName) == false)
-                const Text("No Ports Found", style: TextStyle(fontSize: 12)),
-            ],
-          ),
-          leading: const Icon(Icons.device_hub, color: Colors.blue),
-          dense: true,
+          key: ValueKey(device),
+          title: Text(deviceName),
+          subtitle: Text('IP: $deviceIp'),
+          leading: const Icon(Icons.device_hub),
         ),
-      for (var ip in _networkDevices)
-        ListTile(
-          title: Text(ip),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Network Device'),
-              if (_portResults.containsKey(ip))
-                Text(
-                  'Open ports: ${_portResults[ip]!.entries
-                      .where((e) => e.value)
-                      .map((e) => e.key)
-                      .join(', ')}',
-                  style: TextStyle(color: Colors.green[700], fontSize: 12),
-                ),
-              if (_portResults.containsKey(ip) == false)
-                const Text("No Ports Found", style: TextStyle(fontSize: 12)),
-            ],
-          ),
-          leading: const Icon(Icons.lan, color: Colors.blue),
-          dense: true,
-        ),
-    ];
+      );
+    }
+    return deviceList;
   }
 
   Widget _buildSecurityResults() {
+    print("HomeScreenContent: _buildSecurityResults() called");
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Security Results", style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 18,
-        )),
+        const Text("Security Results",
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            )),
         const SizedBox(height: 12),
-        ..._securityResults.map((r) =>
-            ListTile(
+        Column(
+          children: _securityResults.map((r) {
+            print("HomeScreenContent: Security result: $r");
+            return ListTile(
+              key: ValueKey(r),
               title: Text(r),
               leading: const Icon(Icons.security, size: 20),
               dense: true,
-            )),
+            );
+          }).toList(),
+        ),
         const SizedBox(height: 12),
-        // Display discovered devices
         if (_discoveredDevices.isNotEmpty || _networkDevices.isNotEmpty)
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -386,7 +420,9 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
               const Text("Discovered Devices:",
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               const SizedBox(height: 8),
-              ..._buildDeviceList(),
+              Column(
+                children: _buildDeviceList(),
+              )
             ],
           )
       ],
@@ -397,10 +433,11 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("My IoT Devices", style: TextStyle(
-          fontWeight: FontWeight.w900,
-          fontSize: 18,
-        )),
+        const Text("My IoT Devices",
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            )),
         const SizedBox(height: 12),
         GridView.builder(
           shrinkWrap: true,
@@ -412,17 +449,21 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
             childAspectRatio: 1.1,
           ),
           itemCount: _devices.length,
-          itemBuilder: (context, index) => _buildDeviceCard(_devices[index]),
+          itemBuilder: (context, index) =>
+              _buildDeviceCard(_devices[index]),
         ),
       ],
     );
   }
 
   String _formatDeviceName(String domain) {
-    return domain
+    String formattedName = domain
         .replaceAll('._http._tcp.local.', '')
         .replaceAll('.local', '')
         .replaceAll('_', ' ');
+    print(
+        "HomeScreenContent: Formatted device name: $domain to $formattedName");
+    return formattedName;
   }
 
   Widget _buildDeviceCard(Device device) {
@@ -442,7 +483,8 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
                   value: device.status,
                   onChanged: (v) => setState(() => device.status = v),
                   activeColor: Colors.green,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  materialTapTargetSize:
+                  MaterialTapTargetSize.shrinkWrap,
                 )
               ],
             ),
@@ -471,7 +513,8 @@ class _HomeScreenContentState extends State<HomeScreenContent> {
       "assets/icons/$iconName",
       width: width,
       height: height,
-      colorFilter: const ColorFilter.mode(Colors.green, BlendMode.srcIn),
+      colorFilter:
+      const ColorFilter.mode(Colors.green, BlendMode.srcIn),
     )
         : Image.asset("assets/icons/$iconName", width: width, height: height);
   }

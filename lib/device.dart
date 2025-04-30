@@ -1,4 +1,3 @@
-
 class Device {
   String name;
   String room;
